@@ -16,9 +16,14 @@ public class ContentServer {
         }
 
         String serverAddr = args[0];
+        String[] parts = serverAddr.split(":");
+        String host = parts[0];
+        int port = Integer.parseInt(parts[1]);
         String filePath = args[1];
 
         ContentServer cs = new ContentServer();
+        JSONObject weatherJson = cs.readFile(filePath);
+        cs.sendPut(host, port, weatherJson);
     }
 
     private JSONObject readFile(String path) throws IOException {
