@@ -11,14 +11,16 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.*;
 
-import org.json.JSONObject;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 
 public class AggregationServer {
     private static final int DEFAULT_PORT = 4567;
     private final int port;
     private final LamportClock clock = new LamportClock();
-    private final Map<String, JSONObject> Data = new ConcurrentHashMap<>();
+    private final Map<String, JsonObject> Data = new ConcurrentHashMap<>();
     private final Map<String, Long> lastUpdate = new ConcurrentHashMap<>();
+    private final Gson gson = new Gson();
 
     public AggregationServer(int port) {
         this.port = port;

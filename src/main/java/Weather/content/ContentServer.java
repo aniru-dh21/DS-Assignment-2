@@ -3,11 +3,14 @@ package Weather.content;
 import Weather.util.LamportClock;
 
 import java.io.*;
+import java.net.Socket;
 
-import org.json.JSONObject;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 
 public class ContentServer {
     private final LamportClock clock = new LamportClock();
+    private final Gson gson = new Gson();
 
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
@@ -22,25 +25,55 @@ public class ContentServer {
         String filePath = args[1];
 
         ContentServer cs = new ContentServer();
-        JSONObject weatherJson = cs.readFile(filePath);
+        JsonObject weatherJson = cs.readFile(filePath);
         cs.sendPut(host, port, weatherJson);
     }
 
-    private JSONObject readFile(String path) throws IOException {
-        JSONObject json = new JSONObject();
+    private JsonObject readFile(String path) throws IOException {
+        JsonObject json = new JsonObject();
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
             String line;
             while ((line = br.readLine()) != null) {
                 String[] parts = line.split(":", 2);
                 if (parts.length == 2) {
-                    json.put(parts[0], parts[1].trim());
+                    json.addProperty(parts[0], parts[1].trim());
                 }
             }
         }
         return json;
     }
 
-    private void sendPut(String serverAddr, JSONObject json) throws IOException {
-        // Todo: Building PUT HTTP Request and sending request via socket
+    private void sendPut(String host, int port, JsonObject json) throws IOException {
+        clock.tick();
+
+        String body = gson.toJson(json);
+        String request =
+                "PUT /weather.json HTTP/1.1\r\n" +
+                        "Host: " + host + "\r\n" +
+                        "User-Agent: ContentServer/1.0\r\n" +
+                        "Lamport-Clock: " + clock.getTime() + "\r\n" +
+                        "Content-Type: application/json\r\n" +
+                        "Content-Length: " + body.length() + "\r\n" +
+                        "\r\n" +
+                        body;
+
+        try (Socket socket = new Socket(host, port);
+             BufferedWriter out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
+
+            out.write(request);
+            out.flush();
+
+            // Read server response
+            String line;
+            while ((line = in.readLine()) != null) {
+                if (line.isEmpty()) break;
+                System.out.println(line);
+                if (line.startsWith("Lamport-Clock:")) {
+                    int serverTime = Integer.parseInt(line.split(":")[1].trim());
+                    clock.update(serverTime);
+                }
+            }
+        }
     }
 }
