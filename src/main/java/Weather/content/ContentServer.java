@@ -1,32 +1,51 @@
 package Weather.content;
 
+import com.google.gson.*;
 import Weather.util.LamportClock;
 
 import java.io.*;
 import java.net.Socket;
-
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
+import java.util.concurrent.*;
 
 public class ContentServer {
     private final LamportClock clock = new LamportClock();
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
+
+    private final String host;
+    private final int port;
+    private final String filePath;
+
+    public ContentServer(String host, int port, String filePath) {
+        this.host = host;
+        this.port = port;
+        this.filePath = filePath;
+    }
 
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
-            System.err.println("Usage: ContentServer <port> <data>");
+            System.err.println("Usage: ContentServer <host:port> <datafile>");
             return;
         }
 
-        String serverAddr = args[0];
-        String[] parts = serverAddr.split(":");
+        String[] parts = args[0].split(":");
         String host = parts[0];
         int port = Integer.parseInt(parts[1]);
         String filePath = args[1];
 
-        ContentServer cs = new ContentServer();
-        JsonObject weatherJson = cs.readFile(filePath);
-        cs.sendPut(host, port, weatherJson);
+        ContentServer cs = new ContentServer(host, port, filePath);
+        cs.start();
+    }
+
+    public void start() {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                JsonObject weatherJson = readFile(filePath);
+                sendPut(weatherJson);
+            } catch (Exception e) {
+                System.err.println("Failed to PUT: " + e.getMessage());
+            }
+        }, 0, 20, TimeUnit.SECONDS);
     }
 
     private JsonObject readFile(String path) throws IOException {
@@ -36,17 +55,17 @@ public class ContentServer {
             while ((line = br.readLine()) != null) {
                 String[] parts = line.split(":", 2);
                 if (parts.length == 2) {
-                    json.addProperty(parts[0], parts[1].trim());
+                    json.addProperty(parts[0].trim(), parts[1].trim());
                 }
             }
         }
         return json;
     }
 
-    private void sendPut(String host, int port, JsonObject json) throws IOException {
-        clock.tick();
-
+    private void sendPut(JsonObject json) throws IOException {
+        clock.tick(); // local event
         String body = gson.toJson(json);
+
         String request =
                 "PUT /weather.json HTTP/1.1\r\n" +
                         "Host: " + host + "\r\n" +
@@ -64,11 +83,12 @@ public class ContentServer {
             out.write(request);
             out.flush();
 
-            // Read server response
             String line;
             while ((line = in.readLine()) != null) {
-                if (line.isEmpty()) break;
-                System.out.println(line);
+                if (line.isEmpty()) {
+                    break;
+                }
+                System.out.println("[ContentServer] " + line);
                 if (line.startsWith("Lamport-Clock:")) {
                     int serverTime = Integer.parseInt(line.split(":")[1].trim());
                     clock.update(serverTime);

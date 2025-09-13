@@ -1,48 +1,43 @@
 package Weather.util;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonParser;
-
+import com.google.gson.*;
 import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.*;
+import java.util.*;
 
 public class PersistenceManager {
     private final File storageFile;
-    private final Gson gson;
+    private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
 
     public PersistenceManager(String filename) {
         this.storageFile = new File(filename);
-        this.gson = new GsonBuilder().setPrettyPrinting().create();
     }
 
     // Save aggregated data atomically
-    public synchronized void save(JsonArray data) throws IOException {
-        File tempFile = new File(storageFile.getAbsolutePath() + ".tmp");
-        try (FileWriter writer = new FileWriter(tempFile)) {
-            writer.write(gson.toJson(data));
-            Files.move(tempFile.toPath(), storageFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            // Clean up temp file if something goes wrong
-            tempFile.delete();
-            throw e;
+    public synchronized void save(Map<String, JsonObject> data) throws IOException {
+        File tempFile = new File(storageFile.getAbsoluteFile() + ".tmp");
+        try (Writer writer = new FileWriter(tempFile)) {
+            gson.toJson(data.values(), writer);
         }
+        Files.move(tempFile.toPath(), storageFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
     }
 
     // Load existing JSON data if available
-    public synchronized JsonArray load() throws IOException {
+    public synchronized Map<String, JsonObject> load() throws IOException {
+        Map<String, JsonObject> map = new HashMap<>();
         if (!storageFile.exists()) {
-            return new JsonArray();
+            return map;
         }
-        try (BufferedReader reader = new BufferedReader(new FileReader(storageFile))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
+
+        try (Reader reader = new FileReader(storageFile)) {
+            JsonArray arr = gson.fromJson(reader, JsonArray.class);
+            for (JsonElement el : arr) {
+                JsonObject obj = el.getAsJsonObject();
+                if (obj.has("id")) {
+                    map.put(obj.get("id").getAsString(), obj);
+                }
             }
-            return JsonParser.parseString(sb.toString()).getAsJsonArray();
         }
+        return map;
     }
 }

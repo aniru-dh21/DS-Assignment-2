@@ -10,22 +10,20 @@ public class GETClient {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
-            System.err.println("Usage: GETClient <server:port>");
+            System.err.println("Usage: GETClient <host:port>");
             return;
         }
 
-        String serverAddr = args[0];
-        String[] parts = serverAddr.split(":");
+        String[] parts = args[0].split(":");
         String host = parts[0];
         int port = Integer.parseInt(parts[1]);
 
         GETClient client = new GETClient();
-        client.sendGET(host, port);
+        client.sendGet(host, port);
     }
 
-    private void sendGET(String host, int port) throws IOException {
-        clock.tick();
-
+    private void sendGet(String host, int port) throws Exception {
+        clock.tick(); // local event
         String request =
                 "GET /weather.json HTTP/1.1\r\n" +
                         "Host: " + host + "\r\n" +
@@ -40,27 +38,29 @@ public class GETClient {
             out.write(request);
             out.flush();
 
-            // Read status + headers
+            // Status + headers
             String line;
             int contentLength = 0;
             while ((line = in.readLine()) != null) {
                 if (line.isEmpty()) break;
-                System.out.println(line);
+                System.out.println("[GETClient] " + line);
+
                 if (line.startsWith("Content-Length:")) {
                     contentLength = Integer.parseInt(line.split(":")[1].trim());
                 }
                 if (line.startsWith("Lamport-Clock:")) {
                     int serverTime = Integer.parseInt(line.split(":")[1].trim());
                     clock.update(serverTime);
+                    System.out.println("[GETClient] Updated Lamport Clock = " + clock.getTime());
                 }
             }
 
-            // Reads body is present
+            // Body
             if (contentLength > 0) {
                 char[] buf = new char[contentLength];
                 in.read(buf, 0, contentLength);
                 String body = new String(buf);
-                System.out.println("\nWeather Data:\n" + body);
+                System.out.println("\n[GETClient] Weather Data:\n" + body);
             }
         }
     }
