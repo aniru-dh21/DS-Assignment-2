@@ -1,0 +1,3 @@
+id:PERSIST1
+name:Persistence Station
+air_temp:18.0
