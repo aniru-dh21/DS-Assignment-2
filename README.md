@@ -68,3 +68,46 @@ Fetch data from server:
 ```bash
 java -cp target/classes weather.client.GETClient localhost:4567
 ```
+
+---
+
+### Running from IntelliJ
+1. Open project in IntelliJ (`File -> Open -> pom.xml`).
+2. Ensure Maven reimport has pulled dependencies (`gson`, `junit`).
+3. Create Run Configurations:
+   - `AggregationSever` -> Main class: `weather.server.AggregationServer`, Program args: `4567`
+   - `ContentServer` -> Main class: `weather.content.ContentServer`, Program args: `localhost:4567 data/weather.txt`
+   - `GETClient` -> Main class: `weather.client.GETClient`, Program args: `localhost:4567`
+4. Run each configuration in order (Server -> Content -> Client).
+
+## Running Tests
+JUnit tests cover:
+- Basic PUT/GET (`AggregationServerTest`)
+- Expiry (30s) (`AggregationServerTest`)
+- Persistence (`AggregationServerTest`)
+- Concurrency / Lamport ordering (`ConcurrencyTest`)
+
+Run via Maven:
+```bash
+mvn test
+```
+
+Or in IntelliJ
+- Right-click `src/test/java` -> Run All Tests.
+
+### Manual Stress Test
+Run `StressTester` to simulate many ContentServers and GETClients:
+```bash
+java -cp target/classes weather.test.StressTester
+```
+
+## Notes
+- Only GET and PUT methods are supported
+- Responses:
+  - `201 Created` -> First PUT for a new entry
+  - `200 OK` -> Successful update
+  - `204 No Content` -> Empty PUT body
+  - `400 Bad Request` -> Unsupported request
+  - `500 Internal Server Error` -> Invalid JSON
+- Server persists state to `weather.json` and restores on restart
+- Entries expire after 30 seconds of no updates.
