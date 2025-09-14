@@ -19,9 +19,6 @@ public class AggregationServer {
     private final PersistenceManager persistence = new PersistenceManager("weather.json");
     private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
 
-    // Queue for concurrency control
-    private final BlockingQueue<RequestTask> requestQueue = new PriorityBlockingQueue<>();
-
     public AggregationServer(int port) {
         this.port = port;
     }
@@ -37,14 +34,8 @@ public class AggregationServer {
             }
             System.out.println("Recovered " + weatherData.size() + " entries from persistence.");
         } catch (Exception e) {
-            System.out.println("No valid persistence found, starting fresh");
+            System.out.println("No valid persistence found, starting fresh.");
         }
-
-        // Start worker thread to process requests
-        Thread workerThread = new Thread(this::processRequests);
-        workerThread.setDaemon(false);
-        workerThread.start();
-        System.out.println("Request processing thread started.");
 
         // Expiry thread
         Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(() -> {
@@ -68,7 +59,7 @@ public class AggregationServer {
 
         // Listen for clients
         ServerSocket serverSocket = new ServerSocket(port);
-        System.out.println("Aggregation running on port " + port);
+        System.out.println("AggregationServer running on port " + port);
         System.out.println("Waiting for client connections...");
 
         while (true) {
@@ -85,46 +76,84 @@ public class AggregationServer {
         }
     }
 
-    private void processRequests() {
-        System.out.println("Request processor thread started and waiting for requests...");
-        while (true) {
-            try {
-                RequestTask task = requestQueue.take(); // block until request
-                System.out.println("Processing request with Lamport time: " + task.lamportTime);
-                task.run();
-                System.out.println("Request processed successfully.");
-            } catch (Exception e) {
-                System.err.println("Error processing requests: " + e.getMessage());
-                e.printStackTrace();
-            }
-        }
-    }
-
     private void persistSafely() {
         try {
             persistence.save(weatherData);
-            System.out.println("Data persisted successfully. Total Entries: " + weatherData.size());
+            System.out.println("Data Persisted successfully. Total entries: " + weatherData.size());
         } catch (IOException e) {
             System.err.println("Persistence failed: " + e.getMessage());
         }
     }
 
-    // Wraps client requests into tasks
-    private class RequestTask implements Runnable, Comparable<RequestTask> {
-        private final HttpRequest request;
-        private final PrintWriter out;
-        private final int lamportTime;
+    private class ClientHandler implements Runnable {
+        private final Socket socket;
 
-        RequestTask(HttpRequest request, PrintWriter out, int lamportTime) {
-            this.request = request;
-            this.out = out;
-            this.lamportTime = lamportTime;
+        public ClientHandler(Socket socket) {
+            this.socket = socket;
         }
 
-        @Override
         public void run() {
+            System.out.println("ClientHandler started for: " + socket.getRemoteSocketAddress());
+
+            BufferedReader in = null;
+            PrintWriter out = null;
+
+            try {
+                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                out = new PrintWriter(socket.getOutputStream(), true);
+
+                System.out.println("Parsing incoming HTTP request...");
+                HttpRequest request = HttpParser.parseRequest(in);
+
+                if (request == null) {
+                    System.err.println("Failed to parse HTTP request - request is null");
+                    return;
+                }
+
+                System.out.println("Successfully parsed request:");
+                System.out.println("Method: " + request.method);
+                System.out.println("Path: " + request.path);
+                System.out.println("Headers: " + request.headers);
+                System.out.println("  Body length: " + (request.body != null ? request.body.length() : 0));
+
+                // Update Lamport Clock
+                int lamportTime = clock.tick(); // local event
+                System.out.println("Local Lamport time after tick: " + lamportTime);
+
+                if (request.headers.containsKey("Lamport-Clock")) {
+                    int clientClock = Integer.parseInt(request.headers.get("Lamport-Clock"));
+                    lamportTime = clock.update(clientClock);
+                    System.out.println("Client Lamport Clock updated: " + lamportTime);
+                }
+
+                // Process request immediately
+                System.out.println("Processing request directly...");
+                processRequest(request, out, lamportTime);
+
+            } catch (Exception e) {
+                System.err.println("Error in ClientHandler: " + e.getMessage());
+                e.printStackTrace();
+            } finally {
+                // Close resources
+                try {
+                    if (in != null) {
+                        in.close();
+                    }
+                    if (out != null) {
+                        out.close();
+                    }
+                    socket.close();
+                    System.out.println("Client connection closed.");
+                } catch (IOException e) {
+                    System.err.println("Error closing client connection: " + e.getMessage());
+                }
+            }
+        }
+
+        private void processRequest(HttpRequest request, PrintWriter out, int lamportTime) {
             System.out.println("Executing " + request.method + " request");
-            HttpResponse response = new HttpResponse();
+
+            HttpResponse response = new  HttpResponse();
 
             switch (request.method) {
                 case "GET":
@@ -145,7 +174,7 @@ public class AggregationServer {
                 case "PUT":
                     System.out.println("Processing PUT request...");
                     if (request.body == null || request.body.isEmpty()) {
-                        System.out.println("PUT request has empty body");
+                        System.out.println("PUT request has empty body.");
                         response.statusCode = 204;
                         response.statusMessage = "No Content";
                     } else {
@@ -183,7 +212,7 @@ public class AggregationServer {
                     break;
 
                 default:
-                    System.out.println("Unsupported method: " + request.method);
+                    System.out.println("Unknown request method: " + request.method);
                     response.statusCode = 400;
                     response.statusMessage = "Bad Request";
                     response.headers.put("Lamport-Clock", String.valueOf(lamportTime));
@@ -199,68 +228,9 @@ public class AggregationServer {
             out.flush();
             System.out.println("Response sent to client.");
         }
-
-        @Override
-        public int compareTo(RequestTask other) {
-            return Integer.compare(this.lamportTime, other.lamportTime);
-        }
     }
 
-    private class ClientHandler implements Runnable {
-        private final Socket socket;
-
-        ClientHandler(Socket socket) {
-            this.socket = socket;
-        }
-
-        public void run() {
-            System.out.println("ClientHandler started for: " + socket.getRemoteSocketAddress());
-
-            try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                 PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
-                System.out.println("Parsing incoming HTTP request...");
-                HttpRequest request = HttpParser.parseRequest(in);
-
-                if (request == null) {
-                    System.err.println("Failed to parse HTTP request = request is null");
-                    return;
-                }
-
-                System.out.println("Successfully parsed request:");
-                System.out.println("Method: " + request.method);
-                System.out.println("Path: " + request.path);
-                System.out.println("Headers: " + request.headers);
-                System.out.println("Body Length: " + (request.body != null ? request.body.length() : 0));
-
-                // Update Lamport Clock
-                int lamportTime = clock.tick(); // local event
-                System.out.println("Local Lamport time after tick: " + lamportTime);
-
-                if (request.headers.containsKey("Lamport-Clock")) {
-                    int clientClock = Integer.parseInt(request.headers.get("Lamport-Clock"));
-                    lamportTime = clock.update(clientClock);
-                    System.out.println("Updated Lamport time after client sync: " + lamportTime);
-                }
-
-                // Add task to queue
-                System.out.println("Adding request to processing queue...");
-                requestQueue.put(new RequestTask(request, out, lamportTime));
-                System.out.println("Request added to queue. Queue size: " + requestQueue.size());
-            } catch (Exception e) {
-                System.err.println("Error in ClientHandler: " + e.getMessage());
-                e.printStackTrace();
-            } finally {
-                try {
-                    socket.close();
-                    System.out.println("Client socket closed.");
-                } catch (IOException e) {
-                    System.err.println("Error closing socket: " + e.getMessage());
-                }
-            }
-        }
-    }
-
-    public static void main (String[] args) throws IOException {
+    public static void main(String[] args) throws IOException {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_PORT;
         new AggregationServer(port).start();
     }
